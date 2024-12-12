@@ -180,6 +180,13 @@ struct common_params {
     int32_t yarn_orig_ctx         =     0; // YaRN original context length
     float   defrag_thold          = -1.0f; // KV cache defragmentation threshold
 
+    bool    aggregate             = false; // The aggregation feature essentially groups multiple requests over a specific time period before starting to process the prompts.
+    int32_t buffer_size           = 36;    // We would wait until there are buffer_size requests or 50 ms before starting to process the requests.
+    int32_t block_size            = 12;    // We group the requests in the buffer into blocks of block_size and process them as an array of prompts, similar to how /completions does.
+
+
+
+
     struct cpu_params cpuparams;
     struct cpu_params cpuparams_batch;
     struct cpu_params draft_cpuparams;

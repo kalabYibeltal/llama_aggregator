@@ -10,7 +10,7 @@ if (MINGW)
 endif()
 
 set(TARGET_SRCS
-    server-timer.cpp
+    server.cpp
     utils.hpp
     httplib.h
 )

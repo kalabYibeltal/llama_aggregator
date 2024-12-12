@@ -42,38 +42,14 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
-#include <atomic>
-#include <memory>
-#include <map>
-#include <future>
 
 using json = nlohmann::ordered_json;
-// std::shared_ptr<std::vector< std::vector<json>, int> > prompt_buffer = std::make_shared<std::vector< std::vector<json>, int> >();
-// std::reference_wrapper<httplib::Response>
-using PromptBufferElement = std::tuple<json, std::reference_wrapper<httplib::Response> , int>;
-std::shared_ptr<std::vector< PromptBufferElement >> prompt_buffer = std::make_shared<std::vector< PromptBufferElement >>();
-
-auto response_deleter = [](httplib::Response* response) {
-    // Perform any necessary cleanup or modifications here
-    delete response;
-};
-
-// std::shared_ptr<std::vector<json>> output_buffer = std::make_shared<std::vector<json>>();
-std::atomic<int> request_id(0);
-
-// using ElementType = std::tuple<bool, std::string, auto, auto>;
-
-// using ElementType = std::tuple<bool, std::string, std::function<bool(size_t offset, httplib::DataSink &sink)>, auto>;
-
-// Create a shared pointer to a map
-// std::shared_ptr<std::map<int, std::vector<ElementType>>> output_buffer =  std::make_shared<map<int, std::vector<ElementType>>>();
-
-std::shared_ptr<std::map<int, bool>> output_buffer =  std::make_shared<std::map<int, bool>>();
 
 enum stop_type {
     STOP_TYPE_FULL,
     STOP_TYPE_PARTIAL,
 };
+
 // state diagram: https://github.com/ggerganov/llama.cpp/pull/9283
 enum slot_state {
     SLOT_STATE_IDLE,
@@ -2263,93 +2239,7 @@ inline void signal_handler(int signal) {
     shutdown_handler(signal);
 }
 
-
-// std::vector<json> prompt_buffer,
-// bool running2,
-
-void process_batch_prompts (
-            const std::function<void(server_task_inf_type, json&, httplib::Response&, int)> handle_completions_generic,
-            std::mutex& buffer_mutex,
-            std::mutex& output_buffer_mutex
-
-        )     {
-
-        while (true) {
-            
-            
-            // std::this_thread::sleep_for(std::chrono::seconds(3));  // Wait for 3 seconds
-            int i = 0;
-            while (prompt_buffer->size() < 54 && i < 5) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                i++;
-            }
-
-            // return 0;
-
-            // std::vector< std::vector<json>, int> prompts_to_process;
-
-            std::vector< PromptBufferElement > prompts_to_process;
-
-          
-                
-                if (!prompt_buffer->empty()) {
-                    std::unique_lock<std::mutex> lock(buffer_mutex);
-                    prompts_to_process = std::move(*prompt_buffer);  // Move prompts out of buffer
-                    prompt_buffer->clear();  // Clear buffer after moving
-                    lock.unlock();
-                }
-            // }
-            
-            
-
-            // //////////// batching 
-
-            // // // // Process the batch of prompts if there are any
-            std::mutex process_mutex;
-
-            if (!prompts_to_process.empty()) {
-
-                std::sort(prompts_to_process.begin(), prompts_to_process.end(),
-                [](const PromptBufferElement &a, const PromptBufferElement &b) {
-                    // Access the "prompt" field from the json object and compare its lengths
-                    const std::string &promptA = std::get<0>(a)["prompt"];
-                    const std::string &promptB = std::get<0>(b)["prompt"];
-                    return promptA.length() < promptB.length();
-                });
-                
-                // std::cout<<prompts_to_process.size()<< " size -----------------------------------  "<<std::endl;
-
-                std::vector<std::future<void>> futures;
-                for (int k = 0; k < prompts_to_process.size(); ++k) {
-
-                    std::unique_lock<std::mutex> lock(process_mutex);
-                    
-                    json& json_data = std::get<0>((prompts_to_process)[ k]);
-                    httplib::Response& response_object = (std::get<1>((prompts_to_process)[ k])).get();
-                    int id = std::get<2>((prompts_to_process)[ k]);
-                    
-                    lock.unlock();
-                    
-                    //  handle_completions_generic(SERVER_TASK_INF_TYPE_COMPLETION, json_data, response_object, id );
-                    auto task = std::async(std::launch::async, handle_completions_generic, 
-                      SERVER_TASK_INF_TYPE_COMPLETION, std::ref(json_data), std::ref(response_object), id);
-
-                    futures.push_back(std::move(task));
-                }
-                for (auto& future : futures) {
-                    future.wait();
-                }
-
-            }
-        }
-    };
-    
-    
-
 int main(int argc, char ** argv) {
-    std::mutex buffer_mutex;
-    std::mutex output_buffer_mutex;
-
     // own arguments required by this example
     common_params params;
 
@@ -2419,7 +2309,6 @@ int main(int argc, char ** argv) {
     };
 
     auto res_ok = [](httplib::Response & res, const json & data) {
-        
         res.set_content(data.dump(-1, ' ', false, json::error_handler_t::replace), MIMETYPE_JSON);
         res.status = 200;
     };
@@ -2815,19 +2704,7 @@ int main(int argc, char ** argv) {
         res_ok(res, {{ "success", true }});
     };
 
-    const auto handle_completions_generic = [&ctx_server, &res_error, &res_ok, &output_buffer_mutex,&buffer_mutex ](server_task_inf_type inf_type, json & data, httplib::Response & res, int id ) {
-           
-
-            // std::unique_lock<std::mutex> lock(buffer_mutex);
-
-            // res.set_content(data.dump(-1, ' ', false, json::error_handler_t::replace), MIMETYPE_JSON);
-            // res.status = 200;
-            // lock.unlock();
-            // std::unique_lock<std::mutex> lock2(output_buffer_mutex);
-            // (*output_buffer)[id] = std::make_pair(true, res);
-            // lock2.unlock();
-
-
+    const auto handle_completions_generic = [&ctx_server, &res_error, &res_ok](server_task_inf_type inf_type, json & data, httplib::Response & res) {
         if (ctx_server.params.embedding) {
             res_error(res, format_error_response("This server does not support completions. Start it without `--embeddings`", ERROR_TYPE_NOT_SUPPORTED));
             return;
@@ -2841,40 +2718,23 @@ int main(int argc, char ** argv) {
         const auto task_ids = server_task::get_list_id(tasks);
 
         if (!stream) {
-            
-             
             ctx_server.receive_cmpl_results(task_ids, [&](std::vector<server_task_result> & results) {
-                
                 if (results.size() == 1) {
                     // single result
                     res_ok(res, results[0].data);
-                    
-                    
-
-                    std::unique_lock<std::mutex> lock(output_buffer_mutex);
-                    (*output_buffer)[id] = true;
-                    lock.unlock();
-
                 } else {
                     // multiple results (multitask)
                     json arr = json::array();
                     for (const auto & res : results) {
                         arr.push_back(res.data);
                     }
-
                     res_ok(res, arr);
-                    
-                    
-                    std::unique_lock<std::mutex> lock(output_buffer_mutex);
-                    (*output_buffer)[id] = true;
-                    lock.unlock();
                 }
             }, [&](const json & error_data) {
                 res_error(res, error_data);
             });
 
             ctx_server.queue_results.remove_waiting_task_ids(task_ids);
-
         } else {
             const auto chunked_content_provider = [task_ids, &ctx_server](size_t, httplib::DataSink & sink) {
                 ctx_server.receive_cmpl_results_stream(task_ids, [&](const server_task_result & result) -> bool {
@@ -2890,88 +2750,13 @@ int main(int argc, char ** argv) {
                 ctx_server.queue_results.remove_waiting_task_ids(task_ids);
             };
 
-            
-
             res.set_chunked_content_provider("text/event-stream", chunked_content_provider, on_complete);
-
-            std::unique_lock<std::mutex> lock(output_buffer_mutex);
-            (*output_buffer)[id] = true;
-            lock.unlock();
-            // put in output buffer
         }
-
-
     };
 
-    const auto handle_completions = [&handle_completions_generic, &buffer_mutex, &output_buffer_mutex](const httplib::Request & req, httplib::Response & res) {
-        
-        auto start = std::chrono::high_resolution_clock::now();
-
+    const auto handle_completions = [&handle_completions_generic](const httplib::Request & req, httplib::Response & res) {
         json data = json::parse(req.body);
-
-        // put res in prompt buffer 
-        ++request_id;
-        int id = request_id.load();
-       
-        
-        PromptBufferElement new_element = {data,  std::ref(res) , id};
-        
-
-        std::unique_lock<std::mutex> lock2(output_buffer_mutex);
-        (*output_buffer)[id] = false;
-        lock2.unlock();
-
-        std::unique_lock<std::mutex> lock(buffer_mutex);
-        prompt_buffer->emplace_back(new_element);
-        lock.unlock();
-        
-        // std::cout<<"prompt added to the buffer"<<std::endl;
-        
-        
-        //just like prompt buffer that collects outputs
-        
-        // monitor the output buffer for id , if the id is present we will return 
-
-        
-
-        while(true) {
-            std::unique_lock<std::mutex> lock3(output_buffer_mutex);
-            if ( (*output_buffer)[id] ){
-                
-                lock3.unlock();
-                // std::cout<<id <<" id -------------"<<std::endl;
-
-                auto end = std::chrono::high_resolution_clock::now();
-                auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-
-                nlohmann::json json_data = nlohmann::json::parse(res.body);
-
-                // Add the counter field to the JSON object
-                json_data["duration"] = duration.count();
-
-                // Serialize the updated JSON object back to a string
-                std::string updated_content = json_data.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
-
-                // Update the response content with the defined MIME type
-                res.set_content(updated_content, MIMETYPE_JSON);
-
-                
-                // std::cout<<id<<" id ----------------------- "  << duration.count() << " milliseconds" << std::endl;
-                
-                return ;
-            }
-            lock3.unlock();
-
-            // std::this_thread::sleep_for(std::chrono::seconds(1));
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-            
-        }
-
-        // res.set_content("Request received and will be processed in batch.", "text/plain");
-        
-        // return handle_completions_generic(SERVER_TASK_INF_TYPE_COMPLETION, data, res);
-
+        return handle_completions_generic(SERVER_TASK_INF_TYPE_COMPLETION, data, res);
     };
 
     const auto handle_infill = [&ctx_server, &res_error, &handle_completions_generic](const httplib::Request & req, httplib::Response & res) {
@@ -3021,7 +2806,7 @@ int main(int argc, char ** argv) {
         }
         data["input_extra"] = input_extra; // default to empty array if it's not exist
 
-        // return handle_completions_generic(SERVER_TASK_INF_TYPE_INFILL, data, res,0);
+        return handle_completions_generic(SERVER_TASK_INF_TYPE_INFILL, data, res);
     };
 
     // TODO: maybe merge this function with "handle_completions_generic"
@@ -3463,28 +3248,7 @@ int main(int argc, char ** argv) {
 
     LOG_INF("%s: server is listening on http://%s:%d - starting the main loop\n", __func__, params.hostname.c_str(), params.port);
 
-
-    std::thread batch_processing_thread(
-    
-        process_batch_prompts,
-        std::ref(handle_completions_generic),
-        std::ref(buffer_mutex),
-        std::ref(output_buffer_mutex)
-         
-    );
-
-// std::ref(prompt_buffer),
-    
-    // std::thread main_loop_thread( ctx_server.queue_tasks.start_loop );
-    
-    // main_loop_thread.join();
-    // std::thread main_loop_thread([&ctx_server]() {
-    //     ctx_server.queue_tasks.start_loop();
-    // });
-
     ctx_server.queue_tasks.start_loop();
-    batch_processing_thread.join();
-
 
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
     struct sigaction sigint_action;
@@ -3505,4 +3269,3 @@ int main(int argc, char ** argv) {
 
     return 0;
 }
-
